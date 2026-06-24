@@ -1,0 +1,15 @@
+*.iml
+.gradle
+/local.properties
+.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+/*.png
+/*_window.xml
+/play_window.xml
+/projection_window.xml
+/ocr_test_page.html
