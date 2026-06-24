@@ -20,6 +20,17 @@
 - ML Kit Korean Text Recognition
 - Gradle Kotlin DSL
 
+## 내려받기
+
+GitHub 저장소 전체를 내려받아야 합니다. 일부 파일만 내려받으면 Gradle 설정이나 Android 리소스가 빠져 실행되지 않습니다.
+
+```bash
+git clone https://github.com/Jxino/accessible-ebook-search-assistant.git
+cd accessible-ebook-search-assistant
+```
+
+Git을 쓰기 어렵다면 GitHub 페이지에서 `Code > Download ZIP`으로 전체 압축 파일을 내려받은 뒤 압축을 풀어도 됩니다.
+
 ## 로컬 설정
 
 `local.properties`는 Git에 올리지 않습니다. 팀원은 `local.properties.example`을 참고해 각자 로컬에 `local.properties`를 만들어야 합니다.
@@ -29,6 +40,35 @@ sdk.dir=C\:\\Users\\YOUR_NAME\\AppData\\Local\\Android\\Sdk
 ALADIN_TTB_KEY=your_aladin_ttb_key_here
 ```
 
+Android Studio에서 프로젝트를 열면 `sdk.dir`은 자동으로 생성될 수 있습니다. 직접 만드는 경우 `local.properties.example`을 복사해서 `local.properties`로 이름을 바꾼 뒤 자신의 Android SDK 경로와 알라딘 API 키를 입력합니다.
+
+```powershell
+Copy-Item local.properties.example local.properties
+```
+
+`ALADIN_TTB_KEY`가 없으면 알라딘 eBook 검색 기능이 동작하지 않습니다.
+
+## 실행 방법
+
+1. Android Studio 실행
+2. `Open` 선택
+3. 저장소 루트 폴더 선택
+4. Gradle Sync 완료 대기
+5. 에뮬레이터 또는 Android 기기 연결
+6. `Run app` 실행
+
+명령어로 빌드만 확인하려면 다음을 실행합니다.
+
+```powershell
+.\gradlew.bat assembleDebug
+```
+
+빌드된 APK 위치는 다음과 같습니다.
+
+```text
+app/build/outputs/apk/debug/app-debug.apk
+```
+
 ## 실행 전 권한
 
 앱에서 다음 권한을 켜야 OCR 보조 기능을 사용할 수 있습니다.
@@ -36,6 +76,16 @@ ALADIN_TTB_KEY=your_aladin_ttb_key_here
 1. 다른 앱 위에 표시 권한
 2. 접근성 서비스 권한
 3. 화면 캡처 권한
+
+앱 첫 화면의 버튼을 위에서부터 눌러 권한을 켜면 됩니다.
+
+## 테스트 방법
+
+1. 앱을 실행해 알라딘 eBook 검색이 되는지 확인합니다.
+2. YES24, 교보문고, 알라딘 eBook 앱 중 하나를 실행합니다.
+3. 대상 앱의 검색 결과 또는 책 목록 화면으로 이동합니다.
+4. 화면 위에 뜨는 `책 후보 찾기` 버튼을 누릅니다.
+5. OCR 결과가 메뉴 전체가 아니라 책 후보 중심으로 표시되는지 확인합니다.
 
 ## 현재 지원 범위
 
