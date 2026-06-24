@@ -64,7 +64,11 @@ class SearchOcrAnalyzer {
     }
 
     private fun String.hasBlockingScreenText(): Boolean {
-        return BLOCKING_SCREEN_TERMS.any { contains(it, ignoreCase = true) }
+        val normalized = normalizedForCompare()
+        val isKyoboEmptyLibrary = normalized.contains("나의") &&
+            normalized.contains("평생") &&
+            normalized.contains("e서재")
+        return isKyoboEmptyLibrary || BLOCKING_SCREEN_TERMS.any { contains(it, ignoreCase = true) }
     }
 
     private fun String.anyNoiseTerm(): Boolean {
@@ -134,7 +138,14 @@ class SearchOcrAnalyzer {
             "웹 뷰어로 즉시 감상",
             "접근 권한 동의가 필요합니다",
             "필수 접근권한",
-            "선택 접근권한"
+            "선택 접근권한",
+            "필수 권한",
+            "권한이 허용되지",
+            "앱을 종료합니다",
+            "권한을 변경하시겠습니까",
+            "권한 다시 설정",
+            "앱종료",
+            "나의 평생 e서재"
         )
 
         private val COMMON_NOISE_TERMS = listOf(
@@ -177,6 +188,7 @@ class SearchOcrAnalyzer {
             "알라딘 eBook",
             "알라딘 ebook",
             "알라딘",
+            "KYOBoeBook",
             "건강을 위한 도서",
             "해외여행",
             "심리학 도서",
