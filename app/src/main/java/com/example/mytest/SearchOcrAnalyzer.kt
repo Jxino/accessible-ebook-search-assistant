@@ -1,6 +1,5 @@
 package com.example.mytest
 
-import android.graphics.Rect
 import com.google.mlkit.vision.text.Text
 
 class SearchOcrAnalyzer {
@@ -10,10 +9,25 @@ class SearchOcrAnalyzer {
             .mapNotNull { line ->
                 val text = line.text.cleanOcrText()
                 val bounds = line.boundingBox
-                if (text.isBlank() || bounds == null) null else OcrLine(text, bounds)
+                if (text.isBlank() || bounds == null) null else SearchLine(text, bounds.top, bounds.left)
             }
-            .sortedWith(compareBy<OcrLine> { it.bounds.top }.thenBy { it.bounds.left })
+            .sortedWith(compareBy<SearchLine> { it.top }.thenBy { it.left })
 
+        return analyzeLines(lines, targetPackage)
+    }
+
+    fun analyze(accessibilityLines: List<String>, targetPackage: String): String {
+        val lines = accessibilityLines
+            .mapIndexedNotNull { index, rawText ->
+                val text = rawText.cleanOcrText()
+                if (text.isBlank()) null else SearchLine(text, index, 0)
+            }
+            .distinctBy { it.text.normalizedForCompare() }
+
+        return analyzeLines(lines, targetPackage)
+    }
+
+    private fun analyzeLines(lines: List<SearchLine>, targetPackage: String): String {
         val fullText = lines.joinToString("\n") { it.text }
         val serviceName = when {
             targetPackage == YES24_PACKAGE -> "YES24"
@@ -50,7 +64,7 @@ class SearchOcrAnalyzer {
         }
     }
 
-    private fun OcrLine.looksLikeBookCandidate(): Boolean {
+    private fun SearchLine.looksLikeBookCandidate(): Boolean {
         val text = text.trim()
         if (text.length < MIN_CANDIDATE_LENGTH) return false
         if (text.length > MAX_CANDIDATE_LENGTH) return false
@@ -93,9 +107,10 @@ class SearchOcrAnalyzer {
             .trim()
     }
 
-    private data class OcrLine(
+    private data class SearchLine(
         val text: String,
-        val bounds: Rect
+        val top: Int,
+        val left: Int
     )
 
     companion object {

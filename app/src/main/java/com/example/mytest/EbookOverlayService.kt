@@ -37,6 +37,7 @@ class EbookOverlayService : AccessibilityService() {
         "kr.co.aladin.ebook"
     )
     private val handler = Handler(Looper.getMainLooper())
+    private val searchOcrAnalyzer = SearchOcrAnalyzer()
     private val ocrResultReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != ScreenCaptureService.ACTION_OCR_RESULT) return
@@ -94,7 +95,7 @@ class EbookOverlayService : AccessibilityService() {
             currentApp.contains("aladin", ignoreCase = true)
     }
 
-    private fun showOverlay(message: String = "책 검색에 필요한 후보만 찾으려면 OCR을 실행하세요.") {
+    private fun showOverlay(message: String = "책 검색에 필요한 후보만 찾으려면 실행하세요.") {
         if (isOverlayShowing) {
             resultTextView?.text = message
             return
@@ -119,18 +120,7 @@ class EbookOverlayService : AccessibilityService() {
                     return@setOnClickListener
                 }
                 Toast.makeText(applicationContext, "책 후보를 찾습니다.", Toast.LENGTH_SHORT).show()
-                val cropBounds = detectOcrCropBounds()
-                hideOverlay()
-                handler.postDelayed({
-                    ScreenCaptureService.requestCapture(
-                        applicationContext,
-                        cropBounds.left,
-                        cropBounds.top,
-                        cropBounds.right,
-                        cropBounds.bottom,
-                        targetPackage
-                    )
-                }, 250L)
+                findBookCandidates(targetPackage)
             }
         }
 
@@ -175,6 +165,62 @@ class EbookOverlayService : AccessibilityService() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    private fun findBookCandidates(targetPackage: String) {
+        val accessibilityLines = collectAccessibilityTextLines()
+        if (accessibilityLines.hasEnoughTextForSearch()) {
+            val result = searchOcrAnalyzer.analyze(accessibilityLines, targetPackage)
+            showOverlay(result)
+            return
+        }
+
+        runScreenOcrFallback(targetPackage)
+    }
+
+    private fun collectAccessibilityTextLines(): List<String> {
+        val root = rootInActiveWindow ?: return emptyList()
+        val lines = mutableListOf<String>()
+
+        fun collectText(rawText: CharSequence?) {
+            val text = rawText
+                ?.toString()
+                ?.replace(Regex("\\s+"), " ")
+                ?.trim()
+                .orEmpty()
+            if (text.isBlank() || text in OVERLAY_TEXT_TERMS) return
+            lines.add(text)
+        }
+
+        fun visit(node: AccessibilityNodeInfo?) {
+            if (node == null || !node.isVisibleToUser) return
+
+            collectText(node.text)
+            collectText(node.contentDescription)
+
+            for (index in 0 until node.childCount) {
+                visit(node.getChild(index))
+            }
+        }
+
+        visit(root)
+        return lines.distinctBy { it.normalizedForAccessibilityCompare() }
+    }
+
+    private fun runScreenOcrFallback(targetPackage: String) {
+        Toast.makeText(applicationContext, "화면 텍스트가 부족해 OCR로 확인합니다.", Toast.LENGTH_SHORT).show()
+        val cropBounds = detectOcrCropBounds()
+        hideOverlay()
+        handler.postDelayed({
+            ScreenCaptureService.requestCapture(
+                applicationContext,
+                cropBounds.left,
+                cropBounds.top,
+                cropBounds.right,
+                cropBounds.bottom,
+                targetPackage
+            )
+        }, 250L)
     }
 
     private fun hideOverlay() {
@@ -255,6 +301,16 @@ class EbookOverlayService : AccessibilityService() {
 
     private fun Int.dp(): Int = (this * resources.displayMetrics.density).toInt()
 
+    private fun List<String>.hasEnoughTextForSearch(): Boolean {
+        return sumOf { it.length } >= MIN_ACCESSIBILITY_TEXT_CHARS
+    }
+
+    private fun String.normalizedForAccessibilityCompare(): String {
+        return lowercase()
+            .replace(Regex("[^\\p{L}\\p{N}]"), "")
+            .trim()
+    }
+
     companion object {
         private const val FALLBACK_HORIZONTAL_CROP_RATIO = 0.04f
         private const val FALLBACK_TOP_CROP_RATIO = 0.06f
@@ -264,6 +320,13 @@ class EbookOverlayService : AccessibilityService() {
         private const val MAX_UI_CONTROL_HEIGHT_RATIO = 0.25f
         private const val MAX_TOP_CROP_RATIO = 0.45f
         private const val MIN_OCR_AREA_HEIGHT_DP = 240
+        private const val MIN_ACCESSIBILITY_TEXT_CHARS = 12
+        private val OVERLAY_TEXT_TERMS = setOf(
+            "책 후보 찾기",
+            "책 후보를 찾습니다.",
+            "책 검색에 필요한 후보만 찾으려면 실행하세요.",
+            "화면 텍스트가 부족해 OCR로 확인합니다."
+        )
     }
 
     override fun onInterrupt() {}
