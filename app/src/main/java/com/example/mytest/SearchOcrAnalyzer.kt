@@ -31,7 +31,7 @@ class SearchOcrAnalyzer {
         val fullText = lines.joinToString("\n") { it.text }
         val serviceName = when {
             targetPackage == YES24_PACKAGE -> "YES24"
-            targetPackage == KYOBO_PACKAGE -> "교보eBook"
+            targetPackage == KYOBO_PACKAGE -> "교보문고"
             targetPackage == ALADIN_PACKAGE -> "알라딘 eBook"
             else -> "지원하지 않는 앱"
         }
@@ -115,7 +115,7 @@ class SearchOcrAnalyzer {
 
     companion object {
         private const val YES24_PACKAGE = "com.yes24.ebook.fourth"
-        private const val KYOBO_PACKAGE = "com.kyobo.ebook.common.b2c"
+        private const val KYOBO_PACKAGE = "mok.android"
         private const val ALADIN_PACKAGE = "kr.co.aladin.ebook"
         private const val MIN_CANDIDATE_LENGTH = 2
         private const val MAX_CANDIDATE_LENGTH = 40
@@ -160,7 +160,9 @@ class SearchOcrAnalyzer {
             "권한을 변경하시겠습니까",
             "권한 다시 설정",
             "앱종료",
-            "나의 평생 e서재"
+            "나의 평생 e서재",
+            "책을 보다",
+            "책을 라이프하다"
         )
 
         private val COMMON_NOISE_TERMS = listOf(
@@ -203,6 +205,7 @@ class SearchOcrAnalyzer {
             "알라딘 eBook",
             "알라딘 ebook",
             "알라딘",
+            "교보문고",
             "KYOBoeBook",
             "건강을 위한 도서",
             "해외여행",

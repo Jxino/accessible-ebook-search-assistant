@@ -33,7 +33,7 @@ class EbookOverlayService : AccessibilityService() {
     private var currentTargetApp: String? = null
     private val targetAppPackages = setOf(
         "com.yes24.ebook.fourth",
-        "com.kyobo.ebook.common.b2c",
+        "mok.android",
         "kr.co.aladin.ebook"
     )
     private val handler = Handler(Looper.getMainLooper())
@@ -55,7 +55,8 @@ class EbookOverlayService : AccessibilityService() {
         val info = AccessibilityServiceInfo().apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            flags = AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
+            flags = AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
+                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         }
         serviceInfo = info
     }
@@ -168,7 +169,7 @@ class EbookOverlayService : AccessibilityService() {
     }
 
     private fun findBookCandidates(targetPackage: String) {
-        val accessibilityLines = collectAccessibilityTextLines()
+        val accessibilityLines = collectAccessibilityTextLines(targetPackage)
         if (accessibilityLines.hasEnoughTextForSearch()) {
             val result = searchOcrAnalyzer.analyze(accessibilityLines, targetPackage)
             showOverlay(result)
@@ -178,8 +179,10 @@ class EbookOverlayService : AccessibilityService() {
         runScreenOcrFallback(targetPackage)
     }
 
-    private fun collectAccessibilityTextLines(): List<String> {
-        val root = rootInActiveWindow ?: return emptyList()
+    private fun collectAccessibilityTextLines(targetPackage: String): List<String> {
+        val roots = collectTargetWindowRoots(targetPackage)
+        if (roots.isEmpty()) return emptyList()
+
         val lines = mutableListOf<String>()
 
         fun collectText(rawText: CharSequence?) {
@@ -203,8 +206,23 @@ class EbookOverlayService : AccessibilityService() {
             }
         }
 
-        visit(root)
+        roots.forEach { root -> visit(root) }
         return lines.distinctBy { it.normalizedForAccessibilityCompare() }
+    }
+
+    private fun collectTargetWindowRoots(targetPackage: String): List<AccessibilityNodeInfo> {
+        val targetRoots = windows
+            .mapNotNull { window -> window.root }
+            .filter { root -> root.packageName?.toString() == targetPackage }
+
+        if (targetRoots.isNotEmpty()) return targetRoots
+
+        val activeRoot = rootInActiveWindow
+        return if (activeRoot?.packageName?.toString() == targetPackage) {
+            listOf(activeRoot)
+        } else {
+            emptyList()
+        }
     }
 
     private fun runScreenOcrFallback(targetPackage: String) {
