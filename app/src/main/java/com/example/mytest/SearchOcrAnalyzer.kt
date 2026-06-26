@@ -44,9 +44,8 @@ class SearchOcrAnalyzer {
             return "$serviceName: 책 검색 화면이 아닙니다.\n검색 결과나 책 목록 화면으로 이동한 뒤 다시 실행하세요."
         }
 
-        val candidates = lines
-            .filter { it.looksLikeBookCandidate() }
-            .distinctBy { it.text.normalizedForCompare() }
+        val candidates = lines.extractBookCandidates()
+            .distinctBy { it.title.normalizedForCompare() }
             .take(MAX_CANDIDATE_COUNT)
 
         if (candidates.isEmpty()) {
@@ -59,12 +58,64 @@ class SearchOcrAnalyzer {
                 append('\n')
                 append(index + 1)
                 append(". ")
-                append(candidate.text)
+                append(candidate.title)
+                candidate.author?.let {
+                    append("\n   저자: ")
+                    append(it)
+                }
+                candidate.publisher?.let {
+                    append("\n   출판사: ")
+                    append(it)
+                }
+                candidate.price?.let {
+                    append("\n   가격: ")
+                    append(it)
+                }
             }
         }
     }
 
-    private fun SearchLine.looksLikeBookCandidate(): Boolean {
+    private fun List<SearchLine>.extractBookCandidates(): List<BookCandidate> {
+        val candidates = mutableListOf<BookCandidate>()
+        var index = 0
+
+        while (index < size) {
+            val line = this[index]
+            if (!line.looksLikeBookTitle()) {
+                index++
+                continue
+            }
+
+            val nearbyLines = drop(index + 1).take(BOOK_DETAIL_LOOKAHEAD_COUNT)
+            val metadataLine = nearbyLines.firstOrNull { it.text.looksLikeAuthorPublisherLine() }
+            val priceLine = nearbyLines.firstOrNull { it.text.looksLikePriceLine() }
+
+            if (metadataLine == null && priceLine == null) {
+                index++
+                continue
+            }
+
+            val metadata = metadataLine?.text?.parseAuthorPublisher()
+            candidates.add(
+                BookCandidate(
+                    title = line.text.removeBookTypePrefix(),
+                    author = metadata?.author,
+                    publisher = metadata?.publisher,
+                    price = priceLine?.text?.extractPrice()
+                )
+            )
+
+            val consumedLine = listOfNotNull(metadataLine, priceLine).maxByOrNull { it.top } ?: line
+            index = indexOf(consumedLine).takeIf { it >= index }?.plus(1) ?: index + 1
+        }
+
+        if (candidates.isNotEmpty()) return candidates
+
+        return filter { it.looksLikeBookTitle() }
+            .map { BookCandidate(title = it.text.removeBookTypePrefix()) }
+    }
+
+    private fun SearchLine.looksLikeBookTitle(): Boolean {
         val text = text.trim()
         if (text.length < MIN_CANDIDATE_LENGTH) return false
         if (text.length > MAX_CANDIDATE_LENGTH) return false
@@ -72,9 +123,56 @@ class SearchOcrAnalyzer {
         if (text.isMostlyNumberOrSymbol()) return false
         if (text.matches(BOOK_COUNT_PATTERN)) return false
         if (text.matches(PERCENT_PATTERN)) return false
+        if (text.looksLikePriceLine()) return false
+        if (text.looksLikeAuthorPublisherLine()) return false
         if (text.contains("지음") || text.contains("옮김") || text.contains("저자")) return false
         if (text.contains("리뷰") || text.contains("평점") || text.contains("다운로드")) return false
         return true
+    }
+
+    private fun String.looksLikeAuthorPublisherLine(): Boolean {
+        return contains("저자") ||
+            contains("지음") ||
+            contains("글)") ||
+            contains("출판사") ||
+            contains(" · ") ||
+            contains(" | ")
+    }
+
+    private fun String.looksLikePriceLine(): Boolean {
+        return PRICE_PATTERN.containsMatchIn(this)
+    }
+
+    private fun String.extractPrice(): String? {
+        return PRICE_PATTERN.find(this)?.value
+    }
+
+    private fun String.removeBookTypePrefix(): String {
+        return replace(BOOK_TYPE_PREFIX_PATTERN, "")
+            .trim()
+    }
+
+    private fun String.parseAuthorPublisher(): BookMetadata {
+        val parts = split(" · ", " | ")
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+
+        val author = parts.firstOrNull()
+            ?.replace("저자(글)", "")
+            ?.replace("저자", "")
+            ?.replace("지음", "")
+            ?.replace("글)", "")
+            ?.replace("(글)", "")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+
+        val publisher = parts.drop(1)
+            .firstOrNull()
+            ?.replace("출판사", "")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+
+        return BookMetadata(author, publisher)
     }
 
     private fun String.hasBlockingScreenText(): Boolean {
@@ -113,6 +211,18 @@ class SearchOcrAnalyzer {
         val left: Int
     )
 
+    private data class BookCandidate(
+        val title: String,
+        val author: String? = null,
+        val publisher: String? = null,
+        val price: String? = null
+    )
+
+    private data class BookMetadata(
+        val author: String?,
+        val publisher: String?
+    )
+
     companion object {
         private const val YES24_PACKAGE = "com.yes24.ebook.fourth"
         private const val KYOBO_PACKAGE = "mok.android"
@@ -120,6 +230,7 @@ class SearchOcrAnalyzer {
         private const val MIN_CANDIDATE_LENGTH = 2
         private const val MAX_CANDIDATE_LENGTH = 40
         private const val MAX_CANDIDATE_COUNT = 8
+        private const val BOOK_DETAIL_LOOKAHEAD_COUNT = 6
 
         private val SUPPORTED_PACKAGES = setOf(
             YES24_PACKAGE,
@@ -129,6 +240,8 @@ class SearchOcrAnalyzer {
 
         private val BOOK_COUNT_PATTERN = Regex(""".*\(\d+\).*""")
         private val PERCENT_PATTERN = Regex("""^\d{1,3}%$""")
+        private val PRICE_PATTERN = Regex("""\d{1,3}(,\d{3})*원""")
+        private val BOOK_TYPE_PREFIX_PATTERN = Regex("""^\[[^\]]+]\s*""")
 
         private val BLOCKING_SCREEN_TERMS = listOf(
             "Viewing full screen",
