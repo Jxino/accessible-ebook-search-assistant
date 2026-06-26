@@ -43,7 +43,7 @@ class EbookOverlayService : AccessibilityService() {
             if (intent?.action != ScreenCaptureService.ACTION_OCR_RESULT) return
             val text = intent.getStringExtra(ScreenCaptureService.EXTRA_OCR_TEXT)
                 ?: "OCR 결과가 없습니다."
-            showOverlay(text)
+            showOverlay("[OCR]\n$text")
         }
     }
 
@@ -174,7 +174,7 @@ class EbookOverlayService : AccessibilityService() {
         val accessibilityLines = collectAccessibilityTextLines(targetPackage)
         if (accessibilityLines.hasEnoughTextForSearch()) {
             val result = searchOcrAnalyzer.analyze(accessibilityLines, targetPackage)
-            showOverlay(result)
+            showOverlay("[접근성 트리]\n$result")
             return
         }
 
