@@ -350,7 +350,11 @@ class SearchOcrAnalyzerTest {
             YES24_PACKAGE
         )
 
-        assertTrue(result, result.contains("완전한 책 정보를 찾지 못했습니다"))
+        assertTrue(result, result.startsWith("YES24 책 후보 1개"))
+        assertTrue(result, result.contains("1. 혼자 공부하는 바이브 코딩 with 클로드 코드"))
+        assertTrue(result, result.contains("저자: 조태호"))
+        assertTrue(result, result.contains("출판사: 한빛미디어"))
+        assertTrue(result, result.contains("가격: 27,000원"))
         assertTrue(result, !result.contains("AI, 신의 탄생"))
         assertTrue(result, !result.contains("출판사: 직강 유튜브"))
     }
@@ -385,6 +389,101 @@ class SearchOcrAnalyzerTest {
         assertTrue(result, result.contains("가격: 27,000원"))
         assertTrue(result, !result.contains("1. 혼자."))
         assertTrue(result, !result.contains("3. AI"))
+    }
+
+    @Test
+    fun yes24DerridaSearchPage_prioritizesTitleAndIgnoresPointPrice() {
+        val result = analyzer.analyzeRecognizedTextLines(
+            listOf(
+                "데리다",
+                "품절포함",
+                "인기도순",
+                "[도서] 데리다와 비트겐슈타인 [수정증보판]",
+                "뉴턴 가버, 이승종 공저 / 이승종, 조성우 공역",
+                "동연출판사 · 2010.11.25.",
+                "10% 16,200원",
+                "P 900원",
+                "[도서] 현대사상 입문 [양장]",
+                "지바 마사야 저, 김상운 역",
+                "arte(아르테) · 2023.5.30.",
+                "10% 21,600원",
+                "P 1,200원"
+            ),
+            YES24_PACKAGE
+        )
+
+        assertTrue(result, result.startsWith("YES24 책 후보 2개"))
+        assertTrue(result, result.contains("1. 데리다와 비트겐슈타인 [수정증보판]"))
+        assertTrue(result, result.contains("저자: 뉴턴 가버, 이승종"))
+        assertTrue(result, result.contains("출판사: 동연출판사"))
+        assertTrue(result, result.contains("가격: 16,200원"))
+        assertTrue(result, result.contains("2. 현대사상 입문 [양장]"))
+        assertTrue(result, result.contains("가격: 21,600원"))
+        assertTrue(result, !result.contains("가격: 900원"))
+    }
+
+    @Test
+    fun kyoboWebBooksSearchPage_ignoresDescriptionAsTitle() {
+        val result = analyzer.analyzeRecognizedTextLines(
+            listOf(
+                "12,074건",
+                "인기순",
+                "필터",
+                "[국내도서] 혼자 공부하는 자바",
+                "1:1 과외하듯 배우는 프로그래밍 자습서",
+                "신용권 저자(글) · 한빛미디어",
+                "25,200원 10% (1,400p)",
+                "9.9 (28)",
+                "[국내도서] 코딩 자율학습 HTML + CSS + 자바스",
+                "크립트",
+                "기초부터 반응형 웹까지 초보자를 위한 웹 개발 입...",
+                "김기수 저자(글) · 길벗",
+                "24,300원",
+                "프로그래밍 언어, 뭘로 시작할까?"
+            ),
+            KYOBO_PACKAGE
+        )
+
+        assertTrue(result, result.startsWith("교보문고 책 후보 2개"))
+        assertTrue(result, result.contains("1. 혼자 공부하는 자바"))
+        assertTrue(result, result.contains("저자: 신용권"))
+        assertTrue(result, result.contains("출판사: 한빛미디어"))
+        assertTrue(result, result.contains("가격: 25,200원"))
+        assertTrue(result, result.contains("2. 코딩 자율학습 HTML + CSS + 자바스크립트"))
+        assertTrue(result, result.contains("저자: 김기수"))
+        assertTrue(result, result.contains("출판사: 길벗"))
+        assertTrue(result, result.contains("가격: 24,300원"))
+        assertTrue(result, !result.contains(":코당"))
+        assertTrue(result, !result.contains("기초부터 반응형"))
+    }
+
+    @Test
+    fun kyoboCloudBookSearchPage_deduplicatesDescriptionCandidate() {
+        val result = analyzer.analyzeRecognizedTextLines(
+            listOf(
+                "12,074건",
+                "인기순",
+                "필터",
+                "[국내도서] 바로바로 클로드 with 코워크, 스킬,",
+                "클로드 코드, 디자인",
+                "인공지능, 에이전트, 커넥터, 플러그인, 아티팩트, 스...",
+                "차진우 저자(글) · 골든래빗(주)",
+                "25,200원",
+                "혼자 공부하는 자바",
+                "[국내도서] 혼자 공부하는 자바",
+                "1:1 과외하듯 배우는 프로그래밍 자습서",
+                "신용권 저자(글) · 한빛미디어"
+            ),
+            KYOBO_PACKAGE
+        )
+
+        assertTrue(result, result.startsWith("교보문고 책 후보 1개"))
+        assertTrue(result, result.contains("1. 바로바로 클로드 with 코워크, 스킬, 클로드 코드, 디자인"))
+        assertTrue(result, result.contains("저자: 차진우"))
+        assertTrue(result, result.contains("출판사: 골든래빗(주)"))
+        assertTrue(result, result.contains("가격: 25,200원"))
+        assertTrue(result, !result.contains("인공지능, 에이전트"))
+        assertTrue(result, !result.contains("2."))
     }
 
     private companion object {
