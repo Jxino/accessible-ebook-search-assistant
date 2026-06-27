@@ -10,13 +10,13 @@ import java.net.URLEncoder
 class AladinBookSearchClient(
     private val ttbKey: String = BuildConfig.ALADIN_TTB_KEY
 ) {
-    suspend fun searchEbooks(query: String): Result<List<AladinBook>> = withContext(Dispatchers.IO) {
+    suspend fun searchBooks(query: String): Result<List<AladinBook>> = withContext(Dispatchers.IO) {
         runCatching {
             val keyword = query.trim()
             require(keyword.isNotBlank()) { "검색어를 입력해 주세요." }
             require(ttbKey.isNotBlank()) { "알라딘 API 키가 설정되지 않았습니다." }
 
-            val json = requestSearch(keyword, searchTarget = "eBook")
+            val json = requestSearch(keyword, searchTarget = "Book")
             parseBooks(json)
         }
     }

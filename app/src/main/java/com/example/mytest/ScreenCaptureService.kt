@@ -93,7 +93,7 @@ class ScreenCaptureService : Service() {
         )
 
         virtualDisplay = mediaProjection?.createVirtualDisplay(
-            "ebook-ocr-capture",
+            "book-ocr-capture",
             screenWidth,
             screenHeight,
             screenDensity,
@@ -110,13 +110,18 @@ class ScreenCaptureService : Service() {
             return
         }
 
-        handler.postDelayed({
-            val bitmap = imageReader?.acquireLatestImage()?.use { image ->
-                image.toBitmap()
-            }
+        captureAndRecognizeWhenImageReady(intent, OCR_CAPTURE_RETRY_COUNT)
+    }
 
+    private fun captureAndRecognizeWhenImageReady(intent: Intent, attemptsLeft: Int) {
+        handler.postDelayed({
+            val bitmap = acquireLatestBitmap()
             if (bitmap == null) {
-                broadcastResult("화면 캡처 이미지를 가져오지 못했습니다.")
+                if (attemptsLeft > 1) {
+                    captureAndRecognizeWhenImageReady(intent, attemptsLeft - 1)
+                } else {
+                    broadcastResult("화면 캡처 이미지를 가져오지 못했습니다.")
+                }
                 return@postDelayed
             }
 
@@ -138,6 +143,12 @@ class ScreenCaptureService : Service() {
                     ocrBitmap.recycle()
                 }
         }, CAPTURE_DELAY_MS)
+    }
+
+    private fun acquireLatestBitmap(): Bitmap? {
+        return imageReader?.acquireLatestImage()?.use { image ->
+            image.toBitmap()
+        }
     }
 
     private fun Image.toBitmap(): Bitmap {
@@ -206,7 +217,7 @@ class ScreenCaptureService : Service() {
             Notification.Builder(this)
         }
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("이북 OCR 실행 중")
+            .setContentTitle("도서 검색 OCR 실행 중")
             .setContentText("현재 화면을 OCR로 읽을 준비가 되었습니다.")
             .setOngoing(true)
             .build()
@@ -254,7 +265,7 @@ class ScreenCaptureService : Service() {
             cropRight: Int,
             cropBottom: Int,
             targetPackage: String
-        ) {
+        ): Boolean {
             val intent = Intent(context, ScreenCaptureService::class.java).apply {
                 action = ACTION_CAPTURE
                 putExtra(EXTRA_CROP_LEFT, cropLeft)
@@ -263,7 +274,16 @@ class ScreenCaptureService : Service() {
                 putExtra(EXTRA_CROP_BOTTOM, cropBottom)
                 putExtra(EXTRA_TARGET_PACKAGE, targetPackage)
             }
-            context.startService(intent)
+            return try {
+                context.startService(intent)
+                true
+            } catch (_: IllegalStateException) {
+                false
+            } catch (_: SecurityException) {
+                false
+            }
         }
+
+        private const val OCR_CAPTURE_RETRY_COUNT = 5
     }
 }

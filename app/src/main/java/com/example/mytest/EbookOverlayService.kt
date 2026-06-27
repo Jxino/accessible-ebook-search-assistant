@@ -9,41 +9,45 @@ import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.PixelFormat
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityNodeInfo
 import android.text.method.ScrollingMovementMethod
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 
 class EbookOverlayService : AccessibilityService() {
     private var windowManager: WindowManager? = null
     private var overlayView: View? = null
     private var resultTextView: TextView? = null
     private var isOverlayShowing = false
+    private var latestOverlayMessage = DEFAULT_OVERLAY_MESSAGE
     private var currentTargetApp: String? = null
+    private var isOcrResultReceiverRegistered = false
     private val targetAppPackages = setOf(
-        "com.yes24.ebook.fourth",
+        "com.yes24.commerce",
         "mok.android",
-        "kr.co.aladin.ebook"
+        "kr.co.aladin.third_shop"
     )
     private val handler = Handler(Looper.getMainLooper())
-    private val searchOcrAnalyzer = SearchOcrAnalyzer()
     private val ocrResultReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != ScreenCaptureService.ACTION_OCR_RESULT) return
             val text = intent.getStringExtra(ScreenCaptureService.EXTRA_OCR_TEXT)
                 ?: "OCR 결과가 없습니다."
-            showOverlay("[OCR]\n$text")
+            Log.d(TAG, "Received OCR result broadcast")
+            handler.post {
+                showOverlay("[OCR]\n$text")
+            }
         }
     }
 
@@ -54,17 +58,18 @@ class EbookOverlayService : AccessibilityService() {
 
         val info = AccessibilityServiceInfo().apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-                AccessibilityEvent.TYPE_WINDOWS_CHANGED
+                AccessibilityEvent.TYPE_WINDOWS_CHANGED or
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            flags = AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
-                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            flags = 0
         }
         serviceInfo = info
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
-            event?.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+            event?.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED ||
+            event?.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
             val currentApp = event.packageName?.toString() ?: return
 
             // ★★★ [진짜 핵심 방어벽] ★★★
@@ -80,7 +85,7 @@ class EbookOverlayService : AccessibilityService() {
             // 지원 대상 앱이 켜졌을 때만 OCR 오버레이를 띄웁니다.
             if (isTargetApp(currentApp)) {
                 currentTargetApp = currentApp
-                if (Settings.canDrawOverlays(applicationContext)) {
+                if (Settings.canDrawOverlays(applicationContext) && !isOverlayShowing) {
                     showOverlay()
                 }
             } else {
@@ -98,10 +103,26 @@ class EbookOverlayService : AccessibilityService() {
             currentApp.contains("aladin", ignoreCase = true)
     }
 
-    private fun showOverlay(message: String = "책 검색에 필요한 후보만 찾으려면 실행하세요.") {
-        if (isOverlayShowing) {
+    private fun showOverlay(message: String = DEFAULT_OVERLAY_MESSAGE) {
+        showOverlay(message, OVERLAY_SHOW_RETRY_COUNT)
+    }
+
+    private fun showOverlay(message: String, attemptsLeft: Int) {
+        latestOverlayMessage = message
+
+        if (!Settings.canDrawOverlays(applicationContext)) {
+            Toast.makeText(applicationContext, "다른 앱 위에 표시 권한을 켜 주세요.", Toast.LENGTH_SHORT).show()
+            isOverlayShowing = false
+            return
+        }
+
+        if (isOverlayShowing && overlayView?.isAttachedToWindow == true) {
             resultTextView?.text = message
             return
+        }
+
+        if (overlayView != null) {
+            hideOverlay()
         }
 
         resultTextView = TextView(applicationContext).apply {
@@ -166,73 +187,31 @@ class EbookOverlayService : AccessibilityService() {
             windowManager?.addView(overlayView, params)
             isOverlayShowing = true
         } catch (e: Exception) {
+            Log.e(TAG, "Failed to show overlay", e)
             e.printStackTrace()
+            overlayView = null
+            resultTextView = null
+            isOverlayShowing = false
+            if (attemptsLeft > 1) {
+                handler.postDelayed({
+                    showOverlay(latestOverlayMessage, attemptsLeft - 1)
+                }, OVERLAY_SHOW_RETRY_DELAY_MS)
+            } else {
+                Toast.makeText(applicationContext, "결과 창을 표시하지 못했습니다.", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
     private fun findBookCandidates(targetPackage: String) {
-        val accessibilityLines = collectAccessibilityTextLines(targetPackage)
-        if (accessibilityLines.hasEnoughTextForSearch()) {
-            val result = searchOcrAnalyzer.analyze(accessibilityLines, targetPackage)
-            showOverlay("[접근성 트리]\n$result")
-            return
-        }
-
-        runScreenOcrFallback(targetPackage)
+        runScreenOcr(targetPackage)
     }
 
-    private fun collectAccessibilityTextLines(targetPackage: String): List<String> {
-        val roots = collectTargetWindowRoots(targetPackage)
-        if (roots.isEmpty()) return emptyList()
-
-        val lines = mutableListOf<String>()
-
-        fun collectText(rawText: CharSequence?) {
-            val text = rawText
-                ?.toString()
-                ?.replace(Regex("\\s+"), " ")
-                ?.trim()
-                .orEmpty()
-            if (text.isBlank() || text in OVERLAY_TEXT_TERMS) return
-            lines.add(text)
-        }
-
-        fun visit(node: AccessibilityNodeInfo?) {
-            if (node == null || !node.isVisibleToUser) return
-
-            collectText(node.text)
-            collectText(node.contentDescription)
-
-            for (index in 0 until node.childCount) {
-                visit(node.getChild(index))
-            }
-        }
-
-        roots.forEach { root -> visit(root) }
-        return lines.distinctBy { it.normalizedForAccessibilityCompare() }
-    }
-
-    private fun collectTargetWindowRoots(targetPackage: String): List<AccessibilityNodeInfo> {
-        val targetRoots = windows
-            .mapNotNull { window -> window.root }
-            .filter { root -> root.packageName?.toString() == targetPackage }
-
-        if (targetRoots.isNotEmpty()) return targetRoots
-
-        val activeRoot = rootInActiveWindow
-        return if (activeRoot?.packageName?.toString() == targetPackage) {
-            listOf(activeRoot)
-        } else {
-            emptyList()
-        }
-    }
-
-    private fun runScreenOcrFallback(targetPackage: String) {
-        Toast.makeText(applicationContext, "화면 텍스트가 부족해 OCR로 확인합니다.", Toast.LENGTH_SHORT).show()
+    private fun runScreenOcr(targetPackage: String) {
+        Toast.makeText(applicationContext, "현재 화면을 OCR로 확인합니다.", Toast.LENGTH_SHORT).show()
         val cropBounds = detectOcrCropBounds()
         hideOverlay()
         handler.postDelayed({
-            ScreenCaptureService.requestCapture(
+            val started = ScreenCaptureService.requestCapture(
                 applicationContext,
                 cropBounds.left,
                 cropBounds.top,
@@ -240,12 +219,13 @@ class EbookOverlayService : AccessibilityService() {
                 cropBounds.bottom,
                 targetPackage
             )
+            if (!started) {
+                showOverlay("[OCR]\n먼저 앱에서 화면 캡처 OCR 권한을 켜 주세요.")
+            }
         }, 250L)
     }
 
     private fun hideOverlay() {
-        if (!isOverlayShowing) return
-
         try {
             overlayView?.let { windowManager?.removeView(it) }
         } catch (e: Exception) {
@@ -264,96 +244,42 @@ class EbookOverlayService : AccessibilityService() {
         val fallbackTop = (screenHeight * FALLBACK_TOP_CROP_RATIO).toInt()
         val fallbackRight = screenWidth - fallbackLeft
         val fallbackBottom = screenHeight - (screenHeight * FALLBACK_BOTTOM_CROP_RATIO).toInt()
-
-        var top = fallbackTop
-        var bottom = fallbackBottom
-        val root = rootInActiveWindow ?: return Rect(fallbackLeft, top, fallbackRight, bottom)
-        val nodeBounds = Rect()
-
-        fun visit(node: AccessibilityNodeInfo?) {
-            if (node == null) return
-            node.getBoundsInScreen(nodeBounds)
-
-            val className = node.className?.toString().orEmpty()
-            val isUiControl = node.isClickable ||
-                node.isFocusable ||
-                node.isEditable ||
-                className.contains("Button", ignoreCase = true) ||
-                className.contains("EditText", ignoreCase = true) ||
-                className.contains("Toolbar", ignoreCase = true)
-
-            val isReasonableSize = nodeBounds.width() > 0 &&
-                nodeBounds.height() > 0 &&
-                nodeBounds.height() < screenHeight * MAX_UI_CONTROL_HEIGHT_RATIO
-
-            if (isUiControl && isReasonableSize) {
-                if (nodeBounds.top < screenHeight * TOP_UI_SEARCH_RATIO) {
-                    top = maxOf(top, nodeBounds.bottom)
-                }
-                if (nodeBounds.bottom > screenHeight * BOTTOM_UI_SEARCH_RATIO) {
-                    bottom = minOf(bottom, nodeBounds.top)
-                }
-            }
-
-            for (index in 0 until node.childCount) {
-                visit(node.getChild(index))
-            }
-        }
-
-        visit(root)
-
-        val maxTop = (screenHeight * MAX_TOP_CROP_RATIO).toInt()
-        if (top > maxTop) top = fallbackTop
-        if (bottom <= top + MIN_OCR_AREA_HEIGHT_DP.dp()) bottom = fallbackBottom
-
-        return Rect(fallbackLeft, top, fallbackRight, bottom)
+        return Rect(fallbackLeft, fallbackTop, fallbackRight, fallbackBottom)
     }
 
     private fun registerOcrResultReceiver() {
+        if (isOcrResultReceiverRegistered) return
+
         val filter = IntentFilter(ScreenCaptureService.ACTION_OCR_RESULT)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(ocrResultReceiver, filter, RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("DEPRECATION")
-            registerReceiver(ocrResultReceiver, filter)
-        }
+        ContextCompat.registerReceiver(
+            this,
+            ocrResultReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        isOcrResultReceiverRegistered = true
     }
 
     private fun Int.dp(): Int = (this * resources.displayMetrics.density).toInt()
 
-    private fun List<String>.hasEnoughTextForSearch(): Boolean {
-        return sumOf { it.length } >= MIN_ACCESSIBILITY_TEXT_CHARS
-    }
-
-    private fun String.normalizedForAccessibilityCompare(): String {
-        return lowercase()
-            .replace(Regex("[^\\p{L}\\p{N}]"), "")
-            .trim()
-    }
-
     companion object {
+        private const val DEFAULT_OVERLAY_MESSAGE = "책 검색에 필요한 후보만 찾으려면 실행하세요."
+        private const val TAG = "EbookOverlayService"
+        private const val OVERLAY_SHOW_RETRY_COUNT = 3
+        private const val OVERLAY_SHOW_RETRY_DELAY_MS = 250L
         private const val FALLBACK_HORIZONTAL_CROP_RATIO = 0.04f
         private const val FALLBACK_TOP_CROP_RATIO = 0.06f
         private const val FALLBACK_BOTTOM_CROP_RATIO = 0.06f
-        private const val TOP_UI_SEARCH_RATIO = 0.35f
-        private const val BOTTOM_UI_SEARCH_RATIO = 0.78f
-        private const val MAX_UI_CONTROL_HEIGHT_RATIO = 0.25f
-        private const val MAX_TOP_CROP_RATIO = 0.45f
-        private const val MIN_OCR_AREA_HEIGHT_DP = 240
-        private const val MIN_ACCESSIBILITY_TEXT_CHARS = 12
-        private val OVERLAY_TEXT_TERMS = setOf(
-            "책 후보 찾기",
-            "책 후보를 찾습니다.",
-            "책 검색에 필요한 후보만 찾으려면 실행하세요.",
-            "화면 텍스트가 부족해 OCR로 확인합니다."
-        )
     }
 
     override fun onInterrupt() {}
 
     override fun onDestroy() {
         try {
-            unregisterReceiver(ocrResultReceiver)
+            if (isOcrResultReceiverRegistered) {
+                unregisterReceiver(ocrResultReceiver)
+                isOcrResultReceiverRegistered = false
+            }
         } catch (_: Exception) {
         }
         hideOverlay()

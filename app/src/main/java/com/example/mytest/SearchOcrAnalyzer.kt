@@ -16,13 +16,12 @@ class SearchOcrAnalyzer {
         return analyzeLines(lines, targetPackage)
     }
 
-    fun analyze(accessibilityLines: List<String>, targetPackage: String): String {
-        val lines = accessibilityLines
+    internal fun analyzeRecognizedTextLines(recognizedLines: List<String>, targetPackage: String): String {
+        val lines = recognizedLines
             .mapIndexedNotNull { index, rawText ->
                 val text = rawText.cleanOcrText()
                 if (text.isBlank()) null else SearchLine(text, index, 0)
             }
-            .distinctBy { it.text.normalizedForCompare() }
 
         return analyzeLines(lines, targetPackage)
     }
@@ -32,7 +31,7 @@ class SearchOcrAnalyzer {
         val serviceName = when {
             targetPackage == YES24_PACKAGE -> "YES24"
             targetPackage == KYOBO_PACKAGE -> "교보문고"
-            targetPackage == ALADIN_PACKAGE -> "알라딘 eBook"
+            targetPackage == ALADIN_PACKAGE -> "알라딘"
             else -> "지원하지 않는 앱"
         }
 
@@ -44,12 +43,15 @@ class SearchOcrAnalyzer {
             return "$serviceName: 책 검색 화면이 아닙니다.\n검색 결과나 책 목록 화면으로 이동한 뒤 다시 실행하세요."
         }
 
-        val candidates = lines.extractBookCandidates()
+        val candidates = lines.extractBookCandidates(targetPackage)
+            .preferCompleteCandidates()
+            .filter { it.isComplete() }
+            .sortedBy { it.order }
             .distinctBy { it.title.normalizedForCompare() }
             .take(MAX_CANDIDATE_COUNT)
 
         if (candidates.isEmpty()) {
-            return "$serviceName: 책 후보를 찾지 못했습니다.\n검색 결과나 책 목록 화면에서 다시 실행하세요."
+            return "$serviceName: 완전한 책 정보를 찾지 못했습니다.\n책 제목, 저자, 출판사, 가격이 모두 보이도록 스크롤한 뒤 다시 실행하세요."
         }
 
         return buildString {
@@ -59,24 +61,21 @@ class SearchOcrAnalyzer {
                 append(index + 1)
                 append(". ")
                 append(candidate.title)
-                candidate.author?.let {
-                    append("\n   저자: ")
-                    append(it)
-                }
-                candidate.publisher?.let {
-                    append("\n   출판사: ")
-                    append(it)
-                }
-                candidate.price?.let {
-                    append("\n   가격: ")
-                    append(it)
-                }
+                append("\n   저자: ")
+                append(candidate.author)
+                append("\n   출판사: ")
+                append(candidate.publisher)
+                append("\n   가격: ")
+                append(candidate.price)
             }
         }
     }
 
-    private fun List<SearchLine>.extractBookCandidates(): List<BookCandidate> {
-        val candidates = mutableListOf<BookCandidate>()
+    private fun List<SearchLine>.extractBookCandidates(targetPackage: String): List<BookCandidate> {
+        extractProductDetailCandidate()?.let { return listOf(it) }
+
+        val candidates = extractBookCandidatesFromMetadata(targetPackage).toMutableList()
+        candidates.addAll(extractBookCandidatesFromPrice(targetPackage))
         var index = 0
 
         while (index < size) {
@@ -86,7 +85,7 @@ class SearchOcrAnalyzer {
                 continue
             }
 
-            val nearbyLines = drop(index + 1).take(BOOK_DETAIL_LOOKAHEAD_COUNT)
+            val nearbyLines = detailLinesAfterTitle(index)
             val metadataLine = nearbyLines.firstOrNull { it.text.looksLikeAuthorPublisherLine() }
             val priceLine = nearbyLines.firstOrNull { it.text.looksLikePriceLine() }
 
@@ -101,7 +100,8 @@ class SearchOcrAnalyzer {
                     title = line.text.removeBookTypePrefix(),
                     author = metadata?.author,
                     publisher = metadata?.publisher,
-                    price = priceLine?.text?.extractPrice()
+                    price = priceLine?.text?.extractPrice(),
+                    order = line.top
                 )
             )
 
@@ -109,31 +109,244 @@ class SearchOcrAnalyzer {
             index = indexOf(consumedLine).takeIf { it >= index }?.plus(1) ?: index + 1
         }
 
-        if (candidates.isNotEmpty()) return candidates
+        if (candidates.isNotEmpty()) {
+            return candidates.distinctBy { it.title.normalizedForCompare() }
+        }
 
         return filter { it.looksLikeBookTitle() }
-            .map { BookCandidate(title = it.text.removeBookTypePrefix()) }
+            .map { BookCandidate(title = it.text.removeBookTypePrefix(), order = it.top) }
+    }
+
+    private fun List<SearchLine>.extractBookCandidatesFromPrice(targetPackage: String): List<BookCandidate> {
+        return mapIndexedNotNull { index, line ->
+            val price = line.text.extractPrice() ?: return@mapIndexedNotNull null
+            val startIndex = (index - MAX_BOOK_DETAIL_LOOKAHEAD_COUNT).coerceAtLeast(0)
+            val previousLines = subList(startIndex, index)
+            val metadataIndexInWindow = previousLines.indexOfLast { it.text.looksLikeAuthorPublisherLine() }
+            if (metadataIndexInWindow < 0) return@mapIndexedNotNull null
+
+            val metadataIndex = startIndex + metadataIndexInWindow
+            val metadata = this[metadataIndex].text.parseAuthorPublisher()
+            val titleCandidate = findTitleBeforeMetadata(metadataIndex, targetPackage) ?: return@mapIndexedNotNull null
+            val publisher = metadata.publisher ?: findPublisherAfterMetadata(metadataIndex)
+
+            BookCandidate(
+                title = titleCandidate.title,
+                author = metadata.author,
+                publisher = publisher,
+                price = price,
+                order = titleCandidate.order
+            )
+        }
+    }
+
+    private fun List<BookCandidate>.preferCompleteCandidates(): List<BookCandidate> {
+        val preferred = sortedWith(
+            compareByDescending<BookCandidate> { it.metadataScore() }
+                .thenByDescending { it.title.length }
+                .thenBy { it.order }
+        ).fold(mutableListOf<BookCandidate>()) { kept, candidate ->
+            val normalizedTitle = candidate.title.normalizedForCompare()
+            val overlapsWithBetterCandidate = kept.any { keptCandidate ->
+                val keptTitle = keptCandidate.title.normalizedForCompare()
+                normalizedTitle in keptTitle || keptTitle in normalizedTitle
+            }
+            if (!overlapsWithBetterCandidate) kept.add(candidate)
+            kept
+        }
+
+        return preferred.sortedBy { it.order }
+    }
+
+    private fun List<SearchLine>.extractBookCandidatesFromMetadata(targetPackage: String): List<BookCandidate> {
+        return mapIndexedNotNull { index, line ->
+            if (!line.text.looksLikeAuthorPublisherLine()) return@mapIndexedNotNull null
+
+            val titleCandidate = findTitleBeforeMetadata(index, targetPackage) ?: return@mapIndexedNotNull null
+            val metadata = line.text.parseAuthorPublisher()
+            val publisher = metadata.publisher ?: findPublisherAfterMetadata(index)
+            val price = drop(index + 1)
+                .take(MAX_BOOK_DETAIL_LOOKAHEAD_COUNT)
+                .firstOrNull { it.text.looksLikePriceLine() }
+                ?.text
+                ?.extractPrice()
+
+            if (metadata.author == null && metadata.publisher == null && price == null) {
+                return@mapIndexedNotNull null
+            }
+
+            BookCandidate(
+                title = titleCandidate.title,
+                author = metadata.author,
+                publisher = publisher,
+                price = price,
+                order = titleCandidate.order
+            )
+        }
+    }
+
+    private fun List<SearchLine>.findTitleBeforeMetadata(
+        metadataIndex: Int,
+        targetPackage: String
+    ): TitleCandidate? {
+        val startIndex = (metadataIndex - MAX_TITLE_LOOKBEHIND_COUNT).coerceAtLeast(0)
+        val previousLines = subList(startIndex, metadataIndex)
+            .takeLastWhile { !it.text.looksLikePriceLine() }
+
+        val anchorIndex = previousLines.indexOfFirst { it.text.hasBookTypePrefix() }
+        if (anchorIndex >= 0) {
+            val anchor = previousLines[anchorIndex]
+            val title = buildTitleFromAnchor(previousLines.drop(anchorIndex), targetPackage)
+            return TitleCandidate(title, anchor.top)
+        }
+
+        return previousLines
+            .asReversed()
+            .firstOrNull { it.looksLikeBookTitle() }
+            ?.let { TitleCandidate(it.text.removeBookTypePrefix(), it.top) }
+    }
+
+    private fun buildTitleFromAnchor(linesFromAnchor: List<SearchLine>, targetPackage: String): String {
+        val titleParts = mutableListOf(linesFromAnchor.first().text.removeBookTypePrefix())
+        for (line in linesFromAnchor.drop(1)) {
+            val text = line.text.trim()
+            if (!text.looksLikeTitleContinuation(targetPackage, titleParts.last())) break
+            titleParts.add(text)
+        }
+        return titleParts.joinToString(" ").compactBrokenTitle()
+    }
+
+    private fun List<SearchLine>.findPublisherAfterMetadata(metadataIndex: Int): String? {
+        return drop(metadataIndex + 1)
+            .takeWhile { !it.text.looksLikePriceLine() }
+            .take(MAX_BOOK_DETAIL_LOOKAHEAD_COUNT)
+            .firstNotNullOfOrNull { it.text.extractStandalonePublisher() }
+    }
+
+    private fun List<SearchLine>.detailLinesAfterTitle(titleIndex: Int): List<SearchLine> {
+        val details = mutableListOf<SearchLine>()
+        for (nextIndex in titleIndex + 1 until size) {
+            val nextLine = this[nextIndex]
+            if (nextLine.looksLikeBookTitle() && details.hasEnoughBookMetadata()) {
+                break
+            }
+            details.add(nextLine)
+            if (details.size >= MAX_BOOK_DETAIL_LOOKAHEAD_COUNT) break
+        }
+        return details
+    }
+
+    private fun List<SearchLine>.hasEnoughBookMetadata(): Boolean {
+        return any { it.text.looksLikeAuthorPublisherLine() } ||
+            any { it.text.looksLikePriceLine() }
+    }
+
+    private fun List<SearchLine>.extractProductDetailCandidate(): BookCandidate? {
+        if (none { line -> line.text.contains(" | ") && line.text.contains("교보문고") }) {
+            return null
+        }
+
+        val authorMarkerIndex = indexOfFirst { line ->
+            line.text.contains("저자") ||
+                line.text.contains("지음") ||
+                line.text.contains("옮김")
+        }
+        if (authorMarkerIndex <= 0) return null
+        if (this[authorMarkerIndex].text.contains(" | ") ||
+            this[authorMarkerIndex].text.contains(" · ")
+        ) {
+            return null
+        }
+
+        val title = extractDetailTitle(authorMarkerIndex) ?: return null
+        val author = extractDetailAuthor(authorMarkerIndex)
+        val publisher = extractDetailPublisher(authorMarkerIndex)
+        val price = firstOrNull { it.text.looksLikePriceLine() }?.text?.extractPrice()
+
+        if (author == null && publisher == null && price == null) return null
+        return BookCandidate(title, author, publisher, price, order = this[authorMarkerIndex].top)
+    }
+
+    private fun List<SearchLine>.extractDetailTitle(authorMarkerIndex: Int): String? {
+        firstOrNull { line ->
+            line.text.contains(" | ") && line.text.contains("교보문고")
+        }?.text
+            ?.substringBefore(" | ")
+            ?.trim()
+            ?.takeIf { it.looksLikeDetailTitle() }
+            ?.let { return it }
+
+        return take(authorMarkerIndex)
+            .asReversed()
+            .firstOrNull { it.text.looksLikeDetailTitle() }
+            ?.text
+    }
+
+    private fun List<SearchLine>.extractDetailAuthor(authorMarkerIndex: Int): String? {
+        val marker = this[authorMarkerIndex].text
+        if (!marker.isAuthorMarkerOnly()) {
+            return marker
+                .replace("저자(글)", "")
+                .replace("저자", "")
+                .replace("지음", "")
+                .replace("옮김", "")
+                .trim()
+                .takeIf { it.isNotBlank() }
+        }
+
+        return getOrNull(authorMarkerIndex - 1)
+            ?.text
+            ?.takeIf { it.looksLikePersonName() }
+    }
+
+    private fun List<SearchLine>.extractDetailPublisher(authorMarkerIndex: Int): String? {
+        return drop(authorMarkerIndex + 1)
+            .firstOrNull { line ->
+                val text = line.text.trim()
+                text.isNotBlank() &&
+                    !text.contains("저자") &&
+                    !text.contains("주간베스트") &&
+                    !text.contains("국내도서") &&
+                    !text.contains("리뷰") &&
+                    !text.contains("평점") &&
+                    !text.looksLikePriceLine() &&
+                    !text.looksLikeDateLine()
+            }
+            ?.text
+            ?.substringBefore(" · ")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
     }
 
     private fun SearchLine.looksLikeBookTitle(): Boolean {
         val text = text.trim()
-        if (text.length < MIN_CANDIDATE_LENGTH) return false
-        if (text.length > MAX_CANDIDATE_LENGTH) return false
-        if (text.anyNoiseTerm()) return false
-        if (text.isMostlyNumberOrSymbol()) return false
-        if (text.matches(BOOK_COUNT_PATTERN)) return false
-        if (text.matches(PERCENT_PATTERN)) return false
-        if (text.looksLikePriceLine()) return false
-        if (text.looksLikeAuthorPublisherLine()) return false
-        if (text.contains("지음") || text.contains("옮김") || text.contains("저자")) return false
-        if (text.contains("리뷰") || text.contains("평점") || text.contains("다운로드")) return false
+        val titleText = text.removeBookTypePrefix()
+        if (titleText.length < MIN_CANDIDATE_LENGTH) return false
+        if (titleText.length > MAX_CANDIDATE_LENGTH) return false
+        if (titleText.anyNoiseTerm()) return false
+        if (titleText.isMostlyNumberOrSymbol()) return false
+        if (titleText.matches(BOOK_COUNT_PATTERN)) return false
+        if (titleText.matches(PERCENT_PATTERN)) return false
+        if (titleText.looksLikePriceLine()) return false
+        if (titleText.looksLikeDateLine()) return false
+        if (titleText.contains(" • ")) return false
+        if (titleText.looksLikeAuthorPublisherLine()) return false
+        if (titleText.contains("지음") || titleText.contains("옮김") || titleText.contains("저자")) return false
+        if (titleText.contains("리뷰") || titleText.contains("평점") || titleText.contains("다운로드")) return false
+        if (titleText.contains("이미지") || titleText.contains("미리보기") || titleText.contains("바로구매")) return false
+        if (titleText.contains("장바구니") || titleText.equals("cart", ignoreCase = true)) return false
+        if (titleText.looksLikeDeliveryOrBenefitLine()) return false
         return true
     }
 
     private fun String.looksLikeAuthorPublisherLine(): Boolean {
         return contains("저자") ||
             contains("지음") ||
+            contains("지은이") ||
             contains("글)") ||
+            endsWith(" 저") ||
+            contains(" 저,") ||
+            contains(" 역") ||
             contains("출판사") ||
             contains(" · ") ||
             contains(" | ")
@@ -141,6 +354,10 @@ class SearchOcrAnalyzer {
 
     private fun String.looksLikePriceLine(): Boolean {
         return PRICE_PATTERN.containsMatchIn(this)
+    }
+
+    private fun String.looksLikeDateLine(): Boolean {
+        return DATE_PATTERN.containsMatchIn(this)
     }
 
     private fun String.extractPrice(): String? {
@@ -152,14 +369,32 @@ class SearchOcrAnalyzer {
             .trim()
     }
 
+    private fun String.hasBookTypePrefix(): Boolean {
+        return BOOK_TYPE_PREFIX_PATTERN.containsMatchIn(trim())
+    }
+
+    private fun String.looksLikeDeliveryOrBenefitLine(): Boolean {
+        return DELIVERY_AND_BENEFIT_TERMS.any { contains(it, ignoreCase = true) } ||
+            Regex("""외\s*\d+건""").containsMatchIn(this)
+    }
+
     private fun String.parseAuthorPublisher(): BookMetadata {
+        parseAuthorTranslatorLine()?.let { return it }
+
         val parts = split(" · ", " | ")
             .map { it.trim() }
             .filter { it.isNotBlank() }
 
+        if (parts.size < 2) {
+            parseAuthorPublisherWithoutSeparator()?.let { return it }
+        }
+
         val author = parts.firstOrNull()
             ?.replace("저자(글)", "")
             ?.replace("저자", "")
+            ?.replace("(지은이)", "")
+            ?.replace("지은이", "")
+            ?.replace(Regex("""\s저$"""), "")
             ?.replace("지음", "")
             ?.replace("글)", "")
             ?.replace("(글)", "")
@@ -167,12 +402,110 @@ class SearchOcrAnalyzer {
             ?.takeIf { it.isNotBlank() }
 
         val publisher = parts.drop(1)
-            .firstOrNull()
-            ?.replace("출판사", "")
-            ?.trim()
+            .lastOrNull()
+            ?.cleanPublisherText()
             ?.takeIf { it.isNotBlank() }
 
         return BookMetadata(author, publisher)
+    }
+
+    private fun String.parseAuthorPublisherWithoutSeparator(): BookMetadata? {
+        val marker = AUTHOR_MARKER_PATTERN.find(this) ?: return null
+        val author = substring(0, marker.range.first)
+            .trim()
+            .takeIf { it.isNotBlank() }
+        val publisher = substring(marker.range.last + 1)
+            .replace(TRANSLATOR_PATTERN, "")
+            .cleanPublisherText()
+            .takeIf { it.isNotBlank() }
+
+        if (author == null && publisher == null) return null
+        return BookMetadata(author, publisher)
+    }
+
+    private fun String.parseAuthorTranslatorLine(): BookMetadata? {
+        if (!contains(" 저,") && !endsWith(" 저")) return null
+        val author = replace(Regex("""\s저(?=,|$)"""), "")
+            .trim()
+            .takeIf { it.isNotBlank() }
+        return BookMetadata(author, publisher = null)
+    }
+
+    private fun String.isAuthorMarkerOnly(): Boolean {
+        val normalized = replace(" ", "")
+        return normalized == "저자(글)" ||
+            normalized == "저자" ||
+            normalized == "(지은이)" ||
+            normalized == "지은이" ||
+            normalized == "저" ||
+            normalized == "지음" ||
+            normalized == "옮김"
+    }
+
+    private fun String.looksLikeTitleContinuation(targetPackage: String, previousPart: String): Boolean {
+        if (isBlank()) return false
+        if (looksLikeAuthorPublisherLine() || looksLikePriceLine()) return false
+        if (anyNoiseTerm() || looksLikeDeliveryOrBenefitLine()) return false
+        if (length > MAX_TITLE_CONTINUATION_LENGTH) return false
+        if (targetPackage == KYOBO_PACKAGE && matches(Regex("""^\d{1,2}$"""))) return true
+        if (targetPackage == KYOBO_PACKAGE && previousPart.contains("개발자가") && contains("wi")) return true
+        if (isMostlyNumberOrSymbol()) return false
+        if (targetPackage != KYOBO_PACKAGE && (previousPart.endsWith("...") || previousPart.endsWith("wi"))) return true
+        if (targetPackage == KYOBO_PACKAGE) return false
+        if (previousPart.lastOrNull()?.isLetterOrDigit() == true && firstOrNull()?.isLetterOrDigit() == true) {
+            return length <= MAX_BROKEN_TITLE_LINE_LENGTH
+        }
+        return false
+    }
+
+    private fun String.compactBrokenTitle(): String {
+        return replace("A I ", "AI ")
+            .replace("wi th", "with")
+            .replace("H BM", "HBM")
+            .replace("코 드", "코드")
+            .replace("설 계", "설계")
+            .replace("업무까 지", "업무까지")
+            .replace(Regex("""(\d{2})\s+(\d{2})"""), "$1$2")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+    }
+
+    private fun String.extractStandalonePublisher(): String? {
+        val cleaned = cleanPublisherText()
+        if (cleaned.isBlank()) return null
+        if (cleaned.looksLikeDateLine() || cleaned.looksLikePriceLine()) return null
+        if (cleaned.anyNoiseTerm() || cleaned.looksLikeDeliveryOrBenefitLine()) return null
+        if (cleaned.contains("할인") || cleaned.contains("원)") || cleaned.contains("평점")) return null
+        return cleaned.takeIf { it.length <= MAX_PUBLISHER_LENGTH }
+    }
+
+    private fun String.cleanPublisherText(): String {
+        return substringBefore(" | ")
+            .substringBefore(" • ")
+            .replace("출판사", "")
+            .trim()
+    }
+
+    private fun String.looksLikeDetailTitle(): Boolean {
+        if (length < MIN_CANDIDATE_LENGTH) return false
+        if (length > MAX_CANDIDATE_LENGTH) return false
+        if (anyNoiseTerm()) return false
+        if (isMostlyNumberOrSymbol()) return false
+        if (matches(BOOK_COUNT_PATTERN)) return false
+        if (matches(PERCENT_PATTERN)) return false
+        if (looksLikePriceLine()) return false
+        if (looksLikeAuthorPublisherLine()) return false
+        if (contains("대표") || contains("이미지") || contains("사이즈")) return false
+        if (contains("교보문고")) return false
+        return true
+    }
+
+    private fun String.looksLikePersonName(): Boolean {
+        if (isBlank()) return false
+        if (length > MAX_PERSON_NAME_LENGTH) return false
+        if (looksLikePriceLine() || looksLikeDateLine()) return false
+        if (anyNoiseTerm()) return false
+        return true
     }
 
     private fun String.hasBlockingScreenText(): Boolean {
@@ -211,12 +544,30 @@ class SearchOcrAnalyzer {
         val left: Int
     )
 
+    private data class TitleCandidate(
+        val title: String,
+        val order: Int
+    )
+
     private data class BookCandidate(
         val title: String,
         val author: String? = null,
         val publisher: String? = null,
-        val price: String? = null
-    )
+        val price: String? = null,
+        val order: Int = Int.MAX_VALUE
+    ) {
+        fun metadataScore(): Int {
+            return listOf(author, publisher, price).count { !it.isNullOrBlank() }
+        }
+
+        fun isComplete(): Boolean {
+            return title.isNotBlank() &&
+                !title.contains("...") &&
+                !author.isNullOrBlank() &&
+                !publisher.isNullOrBlank() &&
+                !price.isNullOrBlank()
+        }
+    }
 
     private data class BookMetadata(
         val author: String?,
@@ -224,13 +575,17 @@ class SearchOcrAnalyzer {
     )
 
     companion object {
-        private const val YES24_PACKAGE = "com.yes24.ebook.fourth"
+        private const val YES24_PACKAGE = "com.yes24.commerce"
         private const val KYOBO_PACKAGE = "mok.android"
-        private const val ALADIN_PACKAGE = "kr.co.aladin.ebook"
+        private const val ALADIN_PACKAGE = "kr.co.aladin.third_shop"
         private const val MIN_CANDIDATE_LENGTH = 2
         private const val MAX_CANDIDATE_LENGTH = 40
         private const val MAX_CANDIDATE_COUNT = 8
-        private const val BOOK_DETAIL_LOOKAHEAD_COUNT = 6
+        private const val MAX_BOOK_DETAIL_LOOKAHEAD_COUNT = 14
+        private const val MAX_TITLE_LOOKBEHIND_COUNT = 10
+        private const val MAX_TITLE_CONTINUATION_LENGTH = 45
+        private const val MAX_BROKEN_TITLE_LINE_LENGTH = 28
+        private const val MAX_PUBLISHER_LENGTH = 30
 
         private val SUPPORTED_PACKAGES = setOf(
             YES24_PACKAGE,
@@ -241,7 +596,11 @@ class SearchOcrAnalyzer {
         private val BOOK_COUNT_PATTERN = Regex(""".*\(\d+\).*""")
         private val PERCENT_PATTERN = Regex("""^\d{1,3}%$""")
         private val PRICE_PATTERN = Regex("""\d{1,3}(,\d{3})*원""")
+        private val DATE_PATTERN = Regex("""(\d{4}년\s*\d{1,2}월\s*\d{1,2}일|\d{4}\.\d{1,2}\.\d{1,2}\.?)""")
         private val BOOK_TYPE_PREFIX_PATTERN = Regex("""^\[[^\]]+]\s*""")
+        private val AUTHOR_MARKER_PATTERN = Regex("""\s*(저자\(글\)|저자|\(지은이\)|지은이|지음|글\)|\(글\)|저)\s*""")
+        private val TRANSLATOR_PATTERN = Regex("""\s*[^·|]+\s*(번역|옮김)\s*""")
+        private const val MAX_PERSON_NAME_LENGTH = 30
 
         private val BLOCKING_SCREEN_TERMS = listOf(
             "Viewing full screen",
@@ -315,6 +674,7 @@ class SearchOcrAnalyzer {
             "내서재",
             "내 서재",
             "전자책",
+            "eBook",
             "알라딘 eBook",
             "알라딘 ebook",
             "알라딘",
@@ -325,6 +685,10 @@ class SearchOcrAnalyzer {
             "심리학 도서",
             "자기 개발",
             "검색",
+            "재검색",
+            "분야",
+            "AI 활용",
+            "상품태그",
             "search button",
             "cart",
             "메뉴",
@@ -339,14 +703,28 @@ class SearchOcrAnalyzer {
             "교보문고",
             "국내도서",
             "컴퓨터/IT",
-            "IT/프로그래밍",
-            "JAVA",
-            "C++",
-            "C#",
             "드론",
-            "Visual Basic",
-            "파이썬",
-            "언리얼"
+            "IT/프로그래밍"
+        )
+
+        private val DELIVERY_AND_BENEFIT_TERMS = listOf(
+            "내일",
+            "도착",
+            "출고",
+            "배송",
+            "무료배송",
+            "사은품",
+            "이벤트",
+            "오늘의 선택",
+            "MD의 선택",
+            "추천해요",
+            "도움돼요",
+            "바로 이 책",
+            "리딩 클럽",
+            "퍼펙트 데이즈",
+            "주간베스트",
+            "쿠폰",
+            "적용가"
         )
     }
 }

@@ -69,7 +69,7 @@ class MainActivity : ComponentActivity() {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // 오류가 났던 글자 크기(fontSize) 속성을 아예 빼버려서 에러 소지를 없앴습니다.
-                Text(text = "이북 오버레이 설정 앱", modifier = Modifier.padding(16.dp))
+                Text(text = "도서 검색 오버레이 설정 앱", modifier = Modifier.padding(16.dp))
 
                 // 1번 버튼: 다른 앱 위에 표시 권한
                 Button(
@@ -109,7 +109,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Text(
-                    text = "알라딘 eBook 검색",
+                    text = "알라딘 도서 검색",
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -132,14 +132,14 @@ class MainActivity : ComponentActivity() {
                         searchMessage = ""
                         books = emptyList()
                         coroutineScope.launch {
-                            val result = aladinBookSearchClient.searchEbooks(query)
+                            val result = aladinBookSearchClient.searchBooks(query)
                             result
                                 .onSuccess { foundBooks ->
                                     books = foundBooks
                                     searchMessage = if (foundBooks.isEmpty()) {
                                         "검색 결과가 없습니다."
                                     } else {
-                                        "알라딘 eBook ${foundBooks.size}개를 찾았습니다."
+                                        "알라딘 도서 ${foundBooks.size}개를 찾았습니다."
                                     }
                                 }
                                 .onFailure { error ->
@@ -151,7 +151,7 @@ class MainActivity : ComponentActivity() {
                     enabled = !isSearching,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 8.dp)
                 ) {
-                    Text(if (isSearching) "검색 중..." else "알라딘 eBook 검색")
+                    Text(if (isSearching) "검색 중..." else "알라딘 도서 검색")
                 }
 
                 if (isSearching) {
