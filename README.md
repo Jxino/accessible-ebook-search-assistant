@@ -22,6 +22,57 @@
 - ML Kit Korean Text Recognition
 - Gradle Kotlin DSL
 
+## 프로젝트 구조
+
+```text
+accessible-ebook-search-assistant/
+├─ app/
+│  ├─ build.gradle.kts
+│  └─ src/
+│     ├─ main/
+│     │  ├─ AndroidManifest.xml
+│     │  ├─ java/com/example/mytest/
+│     │  │  ├─ MainActivity.kt
+│     │  │  ├─ EbookOverlayService.kt
+│     │  │  ├─ ScreenCaptureService.kt
+│     │  │  ├─ OcrProcessor.kt
+│     │  │  ├─ SearchOcrAnalyzer.kt
+│     │  │  ├─ AladinBook.kt
+│     │  │  └─ AladinBookSearchClient.kt
+│     │  └─ res/
+│     │     ├─ values/
+│     │     └─ xml/
+│     ├─ androidTest/
+│     └─ test/
+├─ docs/
+│  └─ hanium_midterm_project_brief.md
+├─ scripts/
+│  ├─ test-aladin-api.ps1
+│  └─ test_aladin_api.py
+├─ gradle/
+├─ build.gradle.kts
+├─ settings.gradle.kts
+├─ gradle.properties
+├─ local.properties.example
+├─ gradlew / gradlew.bat
+└─ README.md
+```
+
+### 주요 파일 역할
+
+| 파일 | 역할 |
+|---|---|
+| `MainActivity.kt` | 앱 첫 화면, 권한 안내, 알라딘 API 검색 UI를 담당합니다. |
+| `EbookOverlayService.kt` | 접근성 서비스와 오버레이 버튼을 관리하고 대상 도서 앱을 감지합니다. |
+| `ScreenCaptureService.kt` | 화면 캡처 권한을 이용해 OCR 대상 영역을 캡처하고 결과 표시 흐름을 제어합니다. |
+| `OcrProcessor.kt` | ML Kit Korean Text Recognition을 이용해 이미지에서 텍스트를 추출합니다. |
+| `SearchOcrAnalyzer.kt` | OCR 결과를 앱별 조건에 맞게 후처리하고 책 후보를 필터링합니다. |
+| `AladinBookSearchClient.kt` | 알라딘 Open API 요청과 응답 파싱을 담당합니다. |
+| `AladinBook.kt` | 알라딘 API 검색 결과 도서 데이터를 표현합니다. |
+| `docs/hanium_midterm_project_brief.md` | 한이음 프로젝트 중간 발표 준비용 팀 공유 문서입니다. |
+| `scripts/test-aladin-api.ps1` | PowerShell 기반 알라딘 API 테스트 스크립트입니다. |
+| `scripts/test_aladin_api.py` | Python 기반 알라딘 API 테스트 스크립트입니다. |
+
 ## 내려받기
 
 GitHub 저장소 전체를 내려받아야 합니다. 일부 파일만 내려받으면 Gradle 설정이나 Android 리소스가 빠져 실행되지 않습니다.
