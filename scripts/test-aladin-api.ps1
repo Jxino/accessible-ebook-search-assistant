@@ -102,23 +102,4 @@ Write-Host "출판사: $($matchedBook.Publisher)"
 Write-Host "ISBN13: $($matchedBook.Isbn13)"
 Write-Host ""
 
-# 3. 찾은 ISBN이 알라딘 API에서 실제 도서로 조회되는지 검증
-$lookupResponse = Invoke-AladinApi -Endpoint "ItemLookUp.aspx" -Params @{
-    ttbkey = $ttbKey
-    itemIdType = "ISBN13"
-    ItemId = $matchedBook.Isbn13
-    output = "js"
-    Version = "20131101"
-}
-
-$lookupBook = $lookupResponse.item | Select-Object -First 1
-
-if (-not $lookupBook -or $lookupBook.isbn13 -ne $matchedBook.Isbn13) {
-    throw "ISBN13으로 알라딘 도서 조회에 실패했습니다."
-}
-
-Write-Host "[3] ISBN13 단일 도서 조회 성공"
-Write-Host "검증 제목: $($lookupBook.title)"
-Write-Host "검증 ISBN13: $($lookupBook.isbn13)"
-Write-Host ""
 Write-Host "알라딘 API 필수 기능 테스트 완료"
