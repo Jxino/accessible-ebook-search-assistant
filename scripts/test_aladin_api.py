@@ -93,6 +93,14 @@ def main() -> None:
     print(f"수집된 고유 ISBN13 레코드 수: {len(local_db)}")
     print()
 
+    print("[수집 레코드 전체 목록]")
+    for index, book in enumerate(local_db, start=1):
+        print(f"{index}. 책 제목: {book['Title']}")
+        print(f"   저자: {book['Author']}")
+        print(f"   출판사: {book['Publisher']}")
+        print(f"   ISBN13: {book['Isbn13']}")
+    print()
+
     # 2. 음성 인식한 책 제목으로 DB에서 ISBN 찾기 테스트
     voice_title = args.voice_title.strip() or local_db[0]["Title"]
     normalized_voice_title = normalize_title(voice_title)

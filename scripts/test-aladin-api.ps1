@@ -76,6 +76,17 @@ Write-Host "[1] 전자책 DB용 데이터 수집 성공"
 Write-Host "수집된 고유 ISBN13 레코드 수: $($localDb.Count)"
 Write-Host ""
 
+Write-Host "[수집 레코드 전체 목록]"
+$recordIndex = 1
+foreach ($book in $localDb) {
+    Write-Host "$recordIndex. 책 제목: $($book.Title)"
+    Write-Host "   저자: $($book.Author)"
+    Write-Host "   출판사: $($book.Publisher)"
+    Write-Host "   ISBN13: $($book.Isbn13)"
+    $recordIndex++
+}
+Write-Host ""
+
 # 2. 음성 인식한 책 제목으로 DB에서 ISBN 찾기 테스트
 if ([string]::IsNullOrWhiteSpace($VoiceTitle)) {
     $VoiceTitle = $localDb[0].Title
